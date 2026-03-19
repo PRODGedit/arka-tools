@@ -1,1 +1,4 @@
-{}
+// brokers.json
+{
+  "TestBroker": ["broker@example.com"]
+}

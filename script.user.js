@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         10speed Planner Auto Email w/DM Link
 // @namespace    http://tampermonkey.net/
-// @version      0.7
-// @description  Planner Auto Email with DM full name + email link
+// @version      0.8
+// @description  Planner Auto Email with DM full name + email link (dynamic Cognito)
 // @match        https://arka.10speed.cloud/planning/dispatch*
 // @match        https://arka.10speed.cloud/orders/*
 // @grant        none
@@ -72,48 +72,96 @@ function extractTruckDriverInfo(leg) {
 }
 
 // -----------------------------
-// Fetch initial data
+// Fetch Cognito Pool info dynamically
 // -----------------------------
-async function fetchInitialData(token) {
+async function fetchCognitoPool(token) {
+    console.log("Fetching Cognito pool info with token:", !!token);
     try {
-        const res = await fetch("https://arka.10speed.cloud/api/initial", {
-            method: "PUT",
+        const res = await fetch("https://arka.10speed.cloud/api/utils/cognito_pool", {
+            method: "GET",
             credentials: "include",
-            headers: {
-                "authorization": token,
-                "accept": "*/*",
-                "content-type": "application/json"
-            },
-            body: JSON.stringify({ identity_id: "us-east-1:dummy" })
+            headers: { "authorization": token, "accept": "*/*" }
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
-    } catch (e) {
-        console.error("Failed to fetch initial data", e);
+        const data = await res.json();
+        console.log("Cognito pool data:", data);
+        return data; // contains id, identityPoolId, app, etc.
+    } catch (err) {
+        console.error("FETCH COGNITO POOL ERROR", err);
         return null;
     }
 }
 
 // -----------------------------
-// Resolve DM full name and email
+// Fetch initial data dynamically
+// -----------------------------
+async function fetchInitialData(token) {
+    try {
+        console.log("Fetching initial data with token:", token ? "FOUND" : "MISSING");
+
+        // get dynamic identity_id from Cognito pool
+        const cognitoData = await fetchCognitoPool(token);
+        if (!cognitoData) return null;
+        const identity_id = cognitoData.identityPoolId;
+        console.log("Using dynamic identity_id:", identity_id);
+
+        const res = await fetch("https://arka.10speed.cloud/api/initial", {
+            method: "PUT",
+            headers: {
+                "accept": "*/*",
+                "content-type": "application/json; charset=UTF-8",
+                "authorization": token
+            },
+            credentials: "include",
+            body: JSON.stringify({ identity_id })
+        });
+
+        console.log("Initial request status:", res.status);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        console.log("Initial data fetched:", data);
+        return data;
+    } catch (err) {
+        console.error("FETCH INITIAL DATA ERROR:", err);
+        return null;
+    }
+}
+
+// -----------------------------
+// Resolve DM w/ debug
 // -----------------------------
 function resolveDM(initialData, managerUsername) {
+    console.log("Resolving DM for username:", managerUsername);
+    if (!initialData) {
+        console.warn("Initial data is null, cannot resolve DM");
+        return { fullName: managerUsername, email: "" };
+    }
+
     const users = initialData?.users?.operations || [];
+    console.log("Users in initial data:", users.map(u => u.username));
+
     const dm = users.find(u => u.username === managerUsername);
-    if (!dm) return { fullName: managerUsername, email: "" };
+    if (!dm) {
+        console.warn(`DM with username '${managerUsername}' not found`);
+        return { fullName: managerUsername, email: "" };
+    }
+
     const fullName = `${dm.given_name || ""} ${dm.family_name || ""}`.trim();
     const email = dm.given_name && dm.family_name
         ? `${dm.given_name.toLowerCase()}.${dm.family_name[0].toLowerCase()}@arkaexpress.com`
         : "";
+    console.log("Resolved DM:", { fullName, email });
     return { fullName, email };
 }
 
 // -----------------------------
-// Auto Email Module
+// Auto Email Module w/ Debug
 // -----------------------------
 function AutoEmailModule() {
     return async function generateAutoEmail() {
         const token = getAuthToken();
+        console.log("Auth token:", token ? "FOUND" : "NOT FOUND");
         if (!token) return alert("Auth token not found");
 
         let orderId = null;
@@ -126,6 +174,7 @@ function AutoEmailModule() {
                 if (num) orderId = num[0];
             }
         }
+        console.log("Order ID:", orderId);
         if (!orderId) return alert("Order ID not detected");
 
         const onlyParam = encodeURIComponent("*,driver.*,truck.*,truck.trailer.*,stops.*,stops.destination.*,stops.trailer.*");
@@ -139,12 +188,14 @@ function AutoEmailModule() {
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
+            console.log("Legs data:", data);
             if (!Array.isArray(data) || !data.length) return alert("No legs found");
 
             const leg = data[0]; // first leg
             const info = extractTruckDriverInfo(leg);
+            console.log("Extracted truck/driver info:", info);
 
-            // fetch initial data once
+            // fetch initial data dynamically
             const initialData = await fetchInitialData(token);
             const dm = resolveDM(initialData, info.driverManager);
 
@@ -153,17 +204,15 @@ function AutoEmailModule() {
             const origin = leg.stops?.[0]?.destination?.city || "";
             const destination = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
 
-            // recipients: add DM email automatically
             const toRecipients = [dm.email, "test@example.com"].filter(Boolean).join(";");
 
             const subject = `Order# ${orderNumber} BOL ${bol} / ${origin} ${destination}`;
-
-            // linkify @DM in body
             const dmLink = dm.email ? `<a href="mailto:${dm.email}">${dm.fullName}</a>` : dm.fullName;
             const body = `Hello!\n\nDriver's info:\n${info.truckNumber} ${info.trailerNumber}\n${info.driverFullName}\n${info.driverPhone}\nDM ${dmLink} for updates\n`;
 
-            const mailtoURL = `mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-            window.open(mailtoURL, "_blank");
+            console.log("Mailto URL:", `mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+
+            window.open(`mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_blank");
 
         } catch (err) {
             console.error("AUTO EMAIL ERROR", err);

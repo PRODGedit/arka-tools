@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         10speed Planner Auto Email w/Auth
+// @name         10speed Planner Auto Email w/DM Link
 // @namespace    http://tampermonkey.net/
-// @version      0.6
-// @description  Planner Auto Email with real API + Cognito auth + Outlook mailto
+// @version      0.7
+// @description  Planner Auto Email with DM full name + email link
 // @match        https://arka.10speed.cloud/planning/dispatch*
 // @match        https://arka.10speed.cloud/orders/*
 // @grant        none
@@ -72,11 +72,47 @@ function extractTruckDriverInfo(leg) {
 }
 
 // -----------------------------
-// Auto Email Module w/ Auth
+// Fetch initial data
+// -----------------------------
+async function fetchInitialData(token) {
+    try {
+        const res = await fetch("https://arka.10speed.cloud/api/initial", {
+            method: "PUT",
+            credentials: "include",
+            headers: {
+                "authorization": token,
+                "accept": "*/*",
+                "content-type": "application/json"
+            },
+            body: JSON.stringify({ identity_id: "us-east-1:dummy" })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+    } catch (e) {
+        console.error("Failed to fetch initial data", e);
+        return null;
+    }
+}
+
+// -----------------------------
+// Resolve DM full name and email
+// -----------------------------
+function resolveDM(initialData, managerUsername) {
+    const users = initialData?.users?.operations || [];
+    const dm = users.find(u => u.username === managerUsername);
+    if (!dm) return { fullName: managerUsername, email: "" };
+    const fullName = `${dm.given_name || ""} ${dm.family_name || ""}`.trim();
+    const email = dm.given_name && dm.family_name
+        ? `${dm.given_name.toLowerCase()}.${dm.family_name[0].toLowerCase()}@arkaexpress.com`
+        : "";
+    return { fullName, email };
+}
+
+// -----------------------------
+// Auto Email Module
 // -----------------------------
 function AutoEmailModule() {
     return async function generateAutoEmail() {
-        console.log("Generating Auto Email...");
         const token = getAuthToken();
         if (!token) return alert("Auth token not found");
 
@@ -108,19 +144,27 @@ function AutoEmailModule() {
             const leg = data[0]; // first leg
             const info = extractTruckDriverInfo(leg);
 
+            // fetch initial data once
+            const initialData = await fetchInitialData(token);
+            const dm = resolveDM(initialData, info.driverManager);
+
             const orderNumber = leg.order_id || "Unknown";
             const bol = leg.bol || "";
             const origin = leg.stops?.[0]?.destination?.city || "";
             const destination = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
 
-            // TODO: replace with real emails from dictionaries
-            const toRecipients = ["test@example.com"].join(";");
+            // recipients: add DM email automatically
+            const toRecipients = [dm.email, "test@example.com"].filter(Boolean).join(";");
 
             const subject = `Order# ${orderNumber} BOL ${bol} / ${origin} ${destination}`;
-            const body = `Hello!\n\nDriver's info:\n${info.truckNumber} ${info.trailerNumber}\n${info.driverFullName}\n${info.driverPhone}\nDM @${info.driverManager || "DM"} for updates\n`;
+
+            // linkify @DM in body
+            const dmLink = dm.email ? `<a href="mailto:${dm.email}">${dm.fullName}</a>` : dm.fullName;
+            const body = `Hello!\n\nDriver's info:\n${info.truckNumber} ${info.trailerNumber}\n${info.driverFullName}\n${info.driverPhone}\nDM ${dmLink} for updates\n`;
 
             const mailtoURL = `mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
             window.open(mailtoURL, "_blank");
+
         } catch (err) {
             console.error("AUTO EMAIL ERROR", err);
             alert("Error generating auto email: " + err.message);

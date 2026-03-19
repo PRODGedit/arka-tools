@@ -144,7 +144,8 @@ function AutoEmailModule() {
                 teamLeadEmail,
                 plannerEmail,
                 csrEmail,
-                afterhours
+                afterhours,
+                "test@example.com" // temporary for testing
             ].filter(Boolean).join(";");
 
             console.log("Final TO list:", toRecipients);

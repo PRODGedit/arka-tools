@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         10speed Planner Auto Email
 // @namespace    http://tampermonkey.net/
-// @version      0.3
-// @description  Planner Auto Email with debug logs
+// @version      0.4
+// @description  Planner Auto Email with debug logs and Outlook-ready mailto
 // @match        https://arka.10speed.cloud/planning/dispatch*
 // @match        https://arka.10speed.cloud/orders/*
 // @grant        none
@@ -79,80 +79,50 @@ async function loadDictionaries() {
 }
 
 // -----------------------------
-// Auto Email Module with debug
+// Auto Email Module with debug and Outlook-ready mailto
 // -----------------------------
 function AutoEmailModule() {
-    function getAuthToken() {
-        for (const key in localStorage)
-            if (key.includes("CognitoIdentityServiceProvider") && key.includes("idToken"))
-                return localStorage.getItem(key);
-        return null;
-    }
-
-    const token = getAuthToken();
-    if (!token) {
-        console.warn("No auth token found");
-        return () => alert("Not authenticated");
-    }
-    console.log("Auth token found");
-
-    let orderId = null;
-    const match = window.location.pathname.match(/orders\/(\d+)/);
-    if (match) orderId = match[1];
-
-    if (!orderId) {
-        const orderEl = document.querySelector('[data-testid="order-number"]');
-        if (orderEl) {
-            const num = (orderEl.innerText.match(/\d+/) || [])[0];
-            if (num) orderId = num;
-        }
-    }
-
-    if (!orderId) {
-        console.warn("Order ID not detected");
-        return () => alert("Order ID not detected");
-    }
-    console.log("Order ID:", orderId);
-
-    const onlyParam = encodeURIComponent("*,driver.*,truck.*,truck.trailer.*,stops.*,stops.destination.*,broker.*");
-    const apiUrl = `https://arka.10speed.cloud/api/legs?page=0&size=100&only=${onlyParam}&order_id=${orderId}&order=sort.asc`;
-    console.log("API URL:", apiUrl);
-
     return async function generateAutoEmail() {
         console.log("Button clicked: generating email...");
         try {
-            const [dict, res] = await Promise.all([
-                loadDictionaries(),
-                fetch(apiUrl, {
-                    method: "GET",
-                    credentials: "include",
-                    headers: { "authorization": token, "accept": "*/*" }
-                }).then(r => r.json())
-            ]);
+            const dict = await loadDictionaries();
 
-            console.log("API response:", res);
+            // ---- MOCK DATA ----
+            const res = [
+                {
+                    driver: "John Doe",
+                    driver_phone: "555-1234",
+                    truck: { number: "TX123", trailer: "TR456" },
+                    order_id: "11111",
+                    bol: "2222",
+                    broker: "TestBroker",
+                    stops: [
+                        { destination: { city: "Los Angeles", state: "CA" } },
+                        { destination: { city: "San Francisco", state: "CA" } }
+                    ]
+                }
+            ];
+            console.log("Using mock API response:", res);
 
-            if (!Array.isArray(res) || !res.length) return alert("No legs found");
+            if (!res.length) return alert("No legs found");
 
             const leg = res[0];
-            console.log("Using leg:", leg);
-
-            // Driver info
             const driverFullName = leg.driver || "Driver Unknown";
             const [firstName, lastName] = driverFullName.split(" ");
-            const truck = leg.truck || "";
-            const trailer = leg.truck?.trailer || "";
+            const truckStr = typeof leg.truck === "string" ? leg.truck : leg.truck?.number || "";
+            const trailerStr = typeof leg.truck?.trailer === "string" ? leg.truck.trailer : leg.truck?.trailer || "";
             const phone = leg.driver_phone || "";
-            console.log("Driver info:", { driverFullName, truck, trailer, phone });
 
-            // Order info
-            const orderNumber = leg.order_id || orderId;
+            console.log("Driver info:", { driverFullName, truckStr, trailerStr, phone });
+
+            const orderNumber = leg.order_id || "Unknown";
             const bol = leg.bol || "";
             const origin = leg.stops?.[0]?.destination?.city || "";
             const destination = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
+
             console.log("Order info:", { orderNumber, bol, origin, destination });
 
-            // Lookup emails (may be empty)
+            // Lookup emails
             const brokerEmails = dict.brokers?.[leg.broker] || [];
             const csrEmail = dict.csr?.[leg.broker] || "";
             const originState = leg.stops?.[0]?.destination?.state || "";
@@ -183,15 +153,19 @@ function AutoEmailModule() {
             const body = `Hello!
 
 Driver's info:
-${truck} ${trailer}
+${truckStr} ${trailerStr}
 ${firstName || ""} ${lastName || ""}
 ${phone || ""}
 DM @${staffInfo.dmName || "DM"} for updates
 `;
+
             console.log("Email subject:", subject);
             console.log("Email body:", body);
 
-            window.open(`mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+            // Open Outlook / default mail client
+            const mailtoURL = `mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            console.log("Opening mailto URL:", mailtoURL);
+            window.location.href = mailtoURL; // more reliable than window.open for Outlook
 
         } catch (err) {
             console.error("AUTO EMAIL ERROR", err);

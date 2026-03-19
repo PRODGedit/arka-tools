@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         10speed Planner Auto Email
 // @namespace    http://tampermonkey.net/
-// @version      0.4
-// @description  Planner Auto Email with debug logs and Outlook-ready mailto
+// @version      0.5
+// @description  Planner Auto Email pulling real legs info + Outlook-ready mailto
 // @match        https://arka.10speed.cloud/planning/dispatch*
 // @match        https://arka.10speed.cloud/orders/*
 // @grant        none
@@ -18,8 +18,6 @@
 // -----------------------------
 function addButtonToHeader(header, id, text, onClick) {
     if (header.querySelector("#" + id)) return;
-    console.log("Adding button:", text);
-
     header.style.display = "flex";
     header.style.alignItems = "center";
     header.style.gap = "8px";
@@ -32,7 +30,6 @@ function addButtonToHeader(header, id, text, onClick) {
         container.style.alignItems = "center";
         container.style.gap = "6px";
         header.appendChild(container);
-        console.log("Created button container");
     }
 
     const btn = document.createElement("button");
@@ -45,128 +42,82 @@ function addButtonToHeader(header, id, text, onClick) {
     btn.style.borderRadius = "4px";
     btn.style.fontSize = "14px";
     btn.style.cursor = "pointer";
-
     btn.onclick = onClick;
+
     container.appendChild(btn);
-    console.log("Button added:", text);
 }
 
 // -----------------------------
-// Helper: fetch JSON from GitHub (returns empty object on fail)
+// Extract truck/trailer/driver info from leg
 // -----------------------------
-async function fetchJSON(url) {
-    try {
-        const res = await fetch(url);
-        return await res.json();
-    } catch (e) {
-        console.warn("Failed to fetch", url, e);
-        return {};
-    }
-}
+function extractTruckDriverInfo(leg) {
+    if (!leg) return {};
 
-async function loadDictionaries() {
-    console.log("Loading dictionaries...");
-    const base = "https://raw.githubusercontent.com/PRODGedit/arka-tools/main/";
-    const [brokers, staff, planners, csr, config] = await Promise.all([
-        fetchJSON(base + "brokers.json"),
-        fetchJSON(base + "staff.json"),
-        fetchJSON(base + "planners.json"),
-        fetchJSON(base + "csr.json"),
-        fetchJSON(base + "config.json"),
-    ]);
-    console.log("Dictionaries loaded:", { brokers, staff, planners, csr, config });
-    return { brokers, staff, planners, csr, config };
+    const truckNumber = leg.truck?.number || "";
+    const trailerNumber = leg.trailer?.[0]?.number || leg.truck?.trailer?.number || "";
+    const driver = leg.driver || {};
+    const driverFullName = [driver.given_name, driver.family_name].filter(Boolean).join(" ") || "";
+    const driverPhone = driver.phone || "";
+    const driverManager = driver.manager || "";
+
+    return {
+        truckNumber,
+        trailerNumber,
+        driverFullName,
+        driverPhone,
+        driverManager
+    };
 }
 
 // -----------------------------
-// Auto Email Module with debug and Outlook-ready mailto
+// Auto Email Module
 // -----------------------------
 function AutoEmailModule() {
     return async function generateAutoEmail() {
         console.log("Button clicked: generating email...");
+
         try {
-            const dict = await loadDictionaries();
+            // ---- FETCH / GET LEGS DATA ----
+            // For testing, you can replace this with your actual fetch from API
+            const legsResponse = await fetch("/api/legs?order_id=" + window.location.pathname.split("/").pop())
+                .then(res => res.json())
+                .catch(() => []);
 
-            // ---- MOCK DATA ----
-            const res = [
-                {
-                    driver: "John Doe",
-                    driver_phone: "555-1234",
-                    truck: { number: "TX123", trailer: "TR456" },
-                    order_id: "11111",
-                    bol: "2222",
-                    broker: "TestBroker",
-                    stops: [
-                        { destination: { city: "Los Angeles", state: "CA" } },
-                        { destination: { city: "San Francisco", state: "CA" } }
-                    ]
-                }
-            ];
-            console.log("Using mock API response:", res);
+            if (!legsResponse.length) return alert("No legs found");
 
-            if (!res.length) return alert("No legs found");
+            const leg = legsResponse[0];
+            const info = extractTruckDriverInfo(leg);
 
-            const leg = res[0];
-            const driverFullName = leg.driver || "Driver Unknown";
-            const [firstName, lastName] = driverFullName.split(" ");
-            const truckStr = typeof leg.truck === "string" ? leg.truck : leg.truck?.number || "";
-            const trailerStr = typeof leg.truck?.trailer === "string" ? leg.truck.trailer : leg.truck?.trailer || "";
-            const phone = leg.driver_phone || "";
+            console.log("Extracted info:", info);
 
-            console.log("Driver info:", { driverFullName, truckStr, trailerStr, phone });
-
+            // --- Order Info ---
             const orderNumber = leg.order_id || "Unknown";
             const bol = leg.bol || "";
             const origin = leg.stops?.[0]?.destination?.city || "";
             const destination = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
 
-            console.log("Order info:", { orderNumber, bol, origin, destination });
-
-            // Lookup emails
-            const brokerEmails = dict.brokers?.[leg.broker] || [];
-            const csrEmail = dict.csr?.[leg.broker] || "";
-            const originState = leg.stops?.[0]?.destination?.state || "";
-            const plannerEmail = dict.planners?.[originState] || "";
-            const staffInfo = dict.staff?.[driverFullName] || {};
-            const dmEmail = staffInfo.dm || "";
-            const coverageEmail = staffInfo.coverage || "";
-            const teamLeadEmail = staffInfo.teamlead || "";
-            const afterhours = dict.config?.afterhours || "";
-
-            console.log("Emails:", {
-                brokerEmails, csrEmail, plannerEmail, dmEmail, coverageEmail, teamLeadEmail, afterhours
-            });
-
+            // --- Lookup emails (mock for now, you can integrate dictionaries) ---
             const toRecipients = [
-                ...brokerEmails,
-                dmEmail,
-                coverageEmail,
-                teamLeadEmail,
-                plannerEmail,
-                csrEmail,
-                afterhours,
-                "test@example.com" // temporary for testing
+                "test@example.com", // placeholder
             ].filter(Boolean).join(";");
 
-            console.log("Final TO list:", toRecipients);
-
+            // --- Compose subject and body ---
             const subject = `Order# ${orderNumber} BOL ${bol} / ${origin} ${destination}`;
             const body = `Hello!
 
 Driver's info:
-${truckStr} ${trailerStr}
-${firstName || ""} ${lastName || ""}
-${phone || ""}
-DM @${staffInfo.dmName || "DM"} for updates
+${info.truckNumber} ${info.trailerNumber}
+${info.driverFullName}
+${info.driverPhone}
+DM @${info.driverManager || "DM"} for updates
 `;
 
             console.log("Email subject:", subject);
             console.log("Email body:", body);
 
-            // Open Outlook / default mail client
+            // --- Open mail client in new tab ---
             const mailtoURL = `mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-            console.log("Opening mailto URL:", mailtoURL);
-            window.location.href = mailtoURL; // more reliable than window.open for Outlook
+            window.open(mailtoURL, "_blank");
 
         } catch (err) {
             console.error("AUTO EMAIL ERROR", err);

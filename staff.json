@@ -1,1 +1,9 @@
-{}
+// staff.json
+{
+  "John Doe": {
+    "dm": "dm@example.com",
+    "coverage": "coverage@example.com",
+    "teamlead": "teamlead@example.com",
+    "dmName": "Jane DM"
+  }
+}

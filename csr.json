@@ -1,1 +1,4 @@
-{}
+// csr.json
+{
+  "TestBroker": "csr@example.com"
+}

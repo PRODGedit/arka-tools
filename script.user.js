@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         10speed Planner Auto Email w/Clipboard
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Planner Auto Email with DM first name, copies body to clipboard, respects Outlook default font/size
 // @match        https://arka.10speed.cloud/planning/dispatch*
 // @match        https://arka.10speed.cloud/orders/*
@@ -11,9 +11,6 @@
 (function() {
 "use strict";
 
-// -----------------------------
-// Helper: add button to order header
-// -----------------------------
 function addButtonToHeader(header, id, text, onClick) {
     if (header.querySelector("#" + id)) return;
     header.style.display = "flex";
@@ -45,9 +42,6 @@ function addButtonToHeader(header, id, text, onClick) {
     container.appendChild(btn);
 }
 
-// -----------------------------
-// Cognito Auth Token
-// -----------------------------
 function getAuthToken() {
     for (const key in localStorage) {
         if (key.includes("CognitoIdentityServiceProvider") && key.includes("idToken")) {
@@ -57,9 +51,6 @@ function getAuthToken() {
     return null;
 }
 
-// -----------------------------
-// Extract truck/trailer/driver info
-// -----------------------------
 function extractTruckDriverInfo(leg) {
     if (!leg) return {};
     const truckNumber = leg.truck?.number || "";
@@ -71,9 +62,6 @@ function extractTruckDriverInfo(leg) {
     return { truckNumber, trailerNumber, driverFullName, driverPhone, driverManager };
 }
 
-// -----------------------------
-// Fetch dynamic IdentityId via AWS Cognito GetId
-// -----------------------------
 async function fetchIdentityId(token) {
     try {
         const payload = {
@@ -82,7 +70,6 @@ async function fetchIdentityId(token) {
                 "cognito-idp.us-east-1.amazonaws.com/us-east-1_cRNQDcqMI": token
             }
         };
-
         const res = await fetch("https://cognito-identity.us-east-1.amazonaws.com/", {
             method: "POST",
             headers: {
@@ -92,7 +79,6 @@ async function fetchIdentityId(token) {
             },
             body: JSON.stringify(payload)
         });
-
         if (!res.ok) throw new Error(`Cognito GetId HTTP ${res.status}`);
         const data = await res.json();
         return data.IdentityId || null;
@@ -102,14 +88,10 @@ async function fetchIdentityId(token) {
     }
 }
 
-// -----------------------------
-// Fetch initial data using dynamic IdentityId
-// -----------------------------
 async function fetchInitialData(token) {
     try {
         const identityId = await fetchIdentityId(token);
         if (!identityId) return null;
-
         const res = await fetch("https://arka.10speed.cloud/api/initial", {
             method: "PUT",
             headers: {
@@ -120,7 +102,6 @@ async function fetchInitialData(token) {
             credentials: "include",
             body: JSON.stringify({ identity_id: identityId })
         });
-
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.json();
     } catch (err) {
@@ -129,9 +110,6 @@ async function fetchInitialData(token) {
     }
 }
 
-// -----------------------------
-// Resolve DM
-// -----------------------------
 function resolveDM(initialData, managerUsername) {
     if (!initialData) return { fullName: managerUsername, email: "" };
     const users = initialData?.users?.operations || [];
@@ -144,13 +122,10 @@ function resolveDM(initialData, managerUsername) {
     return { fullName, email };
 }
 
-// -----------------------------
-// Auto Email Module using clipboard
-// -----------------------------
 function AutoEmailModule() {
     return async function generateAutoEmail() {
         const token = getAuthToken();
-        if (!token) return alert("Auth token not found");
+        if (!token) return;
 
         let orderId = null;
         const match = window.location.pathname.match(/orders\/(\d+)/);
@@ -162,7 +137,7 @@ function AutoEmailModule() {
                 if (num) orderId = num[0];
             }
         }
-        if (!orderId) return alert("Order ID not detected");
+        if (!orderId) return;
 
         const onlyParam = encodeURIComponent("*,driver.*,truck.*,truck.trailer.*,stops.*,stops.destination.*,stops.trailer.*");
         const apiUrl = `https://arka.10speed.cloud/api/legs?page=0&size=100&only=${onlyParam}&order_id=${orderId}&order=sort.asc`;
@@ -175,7 +150,7 @@ function AutoEmailModule() {
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-            if (!Array.isArray(data) || !data.length) return alert("No legs found");
+            if (!Array.isArray(data) || !data.length) return;
 
             const leg = data[0];
             const info = extractTruckDriverInfo(leg);
@@ -184,33 +159,31 @@ function AutoEmailModule() {
 
             const orderNumber = leg.order_id || "Unknown";
             const bol = leg.bol || "";
-            const origin = leg.stops?.[0]?.destination?.city || "";
-            const destination = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
+            const originCity = leg.stops?.[0]?.destination?.city || "";
+            const originState = leg.stops?.[0]?.destination?.state || "";
+            const destCity = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
+            const destState = leg.stops?.[leg.stops.length - 1]?.destination?.state || "";
+
+            const origin = `${originCity}, ${originState}`;
+            const destination = `${destCity}, ${destState}`;
 
             const toRecipients = [dm.email, "test@example.com"].filter(Boolean).join(";");
-            const subject = `Order# ${orderNumber} BOL ${bol} / ${origin} ${destination}`;
+            const subject = `${origin} ${destination} // Order# ${orderNumber} BOL ${bol}`;
 
-            // Compose body as plain text with @DM
             const body = `Hello!\n\nDriver's info:\n${info.truckNumber} ${info.trailerNumber}\n${info.driverFullName}\n${info.driverPhone}\nDM @${dm.fullName} for updates\n`;
 
             // Copy body to clipboard
             await navigator.clipboard.writeText(body);
 
-            // Open new email window with subject & recipients
+            // Open mailto with subject & recipients only
             window.open(`mailto:${toRecipients}?subject=${encodeURIComponent(subject)}`, "_blank");
-
-            alert("Email body copied to clipboard. Paste it into Outlook (Ctrl+V) to keep your default font and size.");
 
         } catch (err) {
             console.error("AUTO EMAIL ERROR", err);
-            alert("Error generating auto email: " + err.message);
         }
     };
 }
 
-// -----------------------------
-// Attach button
-// -----------------------------
 function tryAddButton() {
     const modal = document.querySelector('[data-testid="dialog-content"]');
     const orderBox = document.querySelector('[data-testid="order-box"]');

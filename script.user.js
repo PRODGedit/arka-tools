@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         10speed Planner Auto Email w/Clipboard
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Planner Auto Email with DM first name, copies body to clipboard, respects Outlook default font/size
-// @match        https://arka.10speed.cloud/planning/dispatch*
+// @match        https://arka.10speed.cloud/planning/*
 // @match        https://arka.10speed.cloud/orders/*
 // @grant        none
 // ==/UserScript==

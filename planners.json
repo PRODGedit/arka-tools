@@ -1,1 +1,4 @@
-{}
+// planners.json
+{
+  "CA": "planners-ca@example.com"
+}

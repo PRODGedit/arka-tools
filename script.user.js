@@ -66,7 +66,7 @@ async function fetchJSON(url) {
 
 async function loadDictionaries() {
     console.log("Loading dictionaries...");
-    const base = "https://raw.githubusercontent.com/YOUR_USERNAME/arka-tools/main/";
+    const base = "https://raw.githubusercontent.com/PRODGedit/arka-tools/main/";
     const [brokers, staff, planners, csr, config] = await Promise.all([
         fetchJSON(base + "brokers.json"),
         fetchJSON(base + "staff.json"),

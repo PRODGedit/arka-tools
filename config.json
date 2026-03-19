@@ -1,1 +1,4 @@
-{}
+// config.json
+{
+  "afterhours": "afterhours@example.com"
+}

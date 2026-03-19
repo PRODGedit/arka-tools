@@ -1,13 +1,11 @@
 // ==UserScript==
-// @name         10speed Planner Auto Email
+// @name         10speed Planner Auto Email w/Auth
 // @namespace    http://tampermonkey.net/
-// @version      0.5
-// @description  Planner Auto Email pulling real legs info + Outlook-ready mailto
+// @version      0.6
+// @description  Planner Auto Email with real API + Cognito auth + Outlook mailto
 // @match        https://arka.10speed.cloud/planning/dispatch*
 // @match        https://arka.10speed.cloud/orders/*
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/PRODGedit/arka-tools/main/script.user.js
-// @downloadURL  https://raw.githubusercontent.com/PRODGedit/arka-tools/main/script.user.js
 // ==/UserScript==
 
 (function() {
@@ -42,92 +40,96 @@ function addButtonToHeader(header, id, text, onClick) {
     btn.style.borderRadius = "4px";
     btn.style.fontSize = "14px";
     btn.style.cursor = "pointer";
-    btn.onclick = onClick;
 
+    btn.onclick = onClick;
     container.appendChild(btn);
 }
 
 // -----------------------------
-// Extract truck/trailer/driver info from leg
+// Cognito Auth Token
+// -----------------------------
+function getAuthToken() {
+    for (const key in localStorage) {
+        if (key.includes("CognitoIdentityServiceProvider") && key.includes("idToken")) {
+            return localStorage.getItem(key);
+        }
+    }
+    return null;
+}
+
+// -----------------------------
+// Extract truck/trailer/driver info
 // -----------------------------
 function extractTruckDriverInfo(leg) {
     if (!leg) return {};
-
     const truckNumber = leg.truck?.number || "";
     const trailerNumber = leg.trailer?.[0]?.number || leg.truck?.trailer?.number || "";
     const driver = leg.driver || {};
     const driverFullName = [driver.given_name, driver.family_name].filter(Boolean).join(" ") || "";
     const driverPhone = driver.phone || "";
     const driverManager = driver.manager || "";
-
-    return {
-        truckNumber,
-        trailerNumber,
-        driverFullName,
-        driverPhone,
-        driverManager
-    };
+    return { truckNumber, trailerNumber, driverFullName, driverPhone, driverManager };
 }
 
 // -----------------------------
-// Auto Email Module
+// Auto Email Module w/ Auth
 // -----------------------------
 function AutoEmailModule() {
     return async function generateAutoEmail() {
-        console.log("Button clicked: generating email...");
+        console.log("Generating Auto Email...");
+        const token = getAuthToken();
+        if (!token) return alert("Auth token not found");
+
+        let orderId = null;
+        const match = window.location.pathname.match(/orders\/(\d+)/);
+        if (match) orderId = match[1];
+        else {
+            const orderEl = document.querySelector('[data-testid="order-number"]');
+            if (orderEl) {
+                const num = orderEl.innerText.match(/\d+/);
+                if (num) orderId = num[0];
+            }
+        }
+        if (!orderId) return alert("Order ID not detected");
+
+        const onlyParam = encodeURIComponent("*,driver.*,truck.*,truck.trailer.*,stops.*,stops.destination.*,stops.trailer.*");
+        const apiUrl = `https://arka.10speed.cloud/api/legs?page=0&size=100&only=${onlyParam}&order_id=${orderId}&order=sort.asc`;
 
         try {
-            // ---- FETCH / GET LEGS DATA ----
-            // For testing, you can replace this with your actual fetch from API
-            const legsResponse = await fetch("/api/legs?order_id=" + window.location.pathname.split("/").pop())
-                .then(res => res.json())
-                .catch(() => []);
+            const res = await fetch(apiUrl, {
+                method: "GET",
+                credentials: "include",
+                headers: { "authorization": token, "accept": "*/*" }
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (!Array.isArray(data) || !data.length) return alert("No legs found");
 
-            if (!legsResponse.length) return alert("No legs found");
-
-            const leg = legsResponse[0];
+            const leg = data[0]; // first leg
             const info = extractTruckDriverInfo(leg);
 
-            console.log("Extracted info:", info);
-
-            // --- Order Info ---
             const orderNumber = leg.order_id || "Unknown";
             const bol = leg.bol || "";
             const origin = leg.stops?.[0]?.destination?.city || "";
             const destination = leg.stops?.[leg.stops.length - 1]?.destination?.city || "";
 
-            // --- Lookup emails (mock for now, you can integrate dictionaries) ---
-            const toRecipients = [
-                "test@example.com", // placeholder
-            ].filter(Boolean).join(";");
+            // TODO: replace with real emails from dictionaries
+            const toRecipients = ["test@example.com"].join(";");
 
-            // --- Compose subject and body ---
             const subject = `Order# ${orderNumber} BOL ${bol} / ${origin} ${destination}`;
-            const body = `Hello!
+            const body = `Hello!\n\nDriver's info:\n${info.truckNumber} ${info.trailerNumber}\n${info.driverFullName}\n${info.driverPhone}\nDM @${info.driverManager || "DM"} for updates\n`;
 
-Driver's info:
-${info.truckNumber} ${info.trailerNumber}
-${info.driverFullName}
-${info.driverPhone}
-DM @${info.driverManager || "DM"} for updates
-`;
-
-            console.log("Email subject:", subject);
-            console.log("Email body:", body);
-
-            // --- Open mail client in new tab ---
             const mailtoURL = `mailto:${toRecipients}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
             window.open(mailtoURL, "_blank");
-
         } catch (err) {
             console.error("AUTO EMAIL ERROR", err);
-            alert("Error generating auto email");
+            alert("Error generating auto email: " + err.message);
         }
     };
 }
 
 // -----------------------------
-// Attach button when header exists
+// Attach button
 // -----------------------------
 function tryAddButton() {
     const modal = document.querySelector('[data-testid="dialog-content"]');
